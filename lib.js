@@ -53,7 +53,7 @@ function getRandomBytes(len) {
 
 async function enc_gcm(aesKey, keyName, value) {
   // Generate a random initialization vector (IV)
-  let iv = getRandomBytes(16); // 96 bits IV for GCM
+  let iv = getRandomBytes(32); // 96 bits IV for GCM
 
   let keyTag = await subtle.importKey("raw", keyName, {name: "HMAC", hash: "SHA-256"}, false, ["sign"]);
 

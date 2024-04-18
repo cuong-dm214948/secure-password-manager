@@ -8,11 +8,11 @@ const { subtle } = require('crypto').webcrypto;
 
 const PBKDF2_ITERATIONS = 100000; // number of iterations for PBKDF2 algorithm
 const MAX_PASSWORD_LENGTH = 64;   // we can assume no password is longer than this many characters
-
+var ready = false;
 /********* Implementation ********/
 class Keychain {
 
-  ready = false;
+  //ready = false;
   /**
    * Initializes the keychain using the provided information. Note that external
    * users should likely never invoke the constructor directly and instead use
@@ -39,6 +39,7 @@ class Keychain {
       aesKey_sig: aesKey_sig,
       aesKey: aesKey
     };
+    //ready to support the other functionality described in the API.
     this.ready = true;
   };
 
@@ -53,8 +54,8 @@ class Keychain {
 
     let rawKey = await subtle.importKey("raw", stringToBuffer(password), "PBKDF2", false, ["deriveKey"]);
 
-    // Master key for load()
-    let masterSalt = getRandomBytes(16);
+    // master key for kvs
+    let masterSalt = getRandomBytes(32);
     let masterKey = await subtle.deriveKey(
       { name: "PBKDF2", salt: masterSalt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
       rawKey,
@@ -63,19 +64,19 @@ class Keychain {
       ["sign", "verify"]
     );
 
-    // AES-GCM key for password
-    let aesSalt = getRandomBytes(16);
-    let aesKey_sig = await subtle.sign("HMAC", masterKey, aesSalt)
-
-    let aesKey = await subtle.importKey("raw", aesKey_sig, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]
-    );
-
     // HMAC key for domain name
-    let hmacSalt = getRandomBytes(16);
+    let hmacSalt = getRandomBytes(32);
     let hmacKey_sig = await subtle.sign("HMAC", masterKey, hmacSalt)
     let hmacKey = await subtle.importKey("raw", hmacKey_sig, { name: "HMAC", hash: { name: "SHA-256" }, length: 256 }, true, ["sign"]
     );
     let kvs ={};
+
+    // AES-GCM key for password
+    let aesSalt = getRandomBytes(32);
+    let aesKey_sig = await subtle.sign("HMAC", masterKey, aesSalt)
+
+    let aesKey = await subtle.importKey("raw", aesKey_sig, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+    ready = true;
     return new Keychain(kvs, masterSalt, hmacSalt, hmacKey_sig, hmacKey, aesSalt, aesKey_sig, aesKey);
   }
 
@@ -100,11 +101,9 @@ class Keychain {
     if(trustedDataCheck !== undefined){
       let checksum = await subtle.digest("SHA-256", stringToBuffer(repr));
       if(encodeBuffer(checksum) !== trustedDataCheck){
-        throw "Tampering is detected!";
+        throw "SHA256 does not match!";
       }
     }
-
-    
 
     let serializedKeychain = JSON.parse(repr);
 
@@ -115,8 +114,8 @@ class Keychain {
     let aesKey_sig = decodeBuffer(serializedKeychain["aesKey_sig"]);
 
     // authentication
-    let rawKey = await subtle.importKey("raw", stringToBuffer(password), { name: "PBKDF2" }, false, ["deriveKey"]
-    );
+    let rawKey = await subtle.importKey("raw", stringToBuffer(password), { name: "PBKDF2" }, false, ["deriveKey"]);
+
     let masterKey = await subtle.deriveKey(
       { name: "PBKDF2", salt: masterSalt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
       rawKey,
@@ -125,13 +124,12 @@ class Keychain {
       ["sign", "verify"]
     );
 
-    let hmacVf = await subtle.verify("HMAC", masterKey, hmacKey_sig, hmacSalt)
+    const hmacVf = await subtle.verify("HMAC", masterKey, hmacKey_sig, hmacSalt);
+    const aesVf = await subtle.verify("HMAC", masterKey, aesKey_sig, aesSalt);
 
-    let aesVf = await subtle.verify("HMAC", masterKey, aesKey_sig, aesSalt);
-
-    // For avoiding timing attack
-    if(hmacVf !== true || aesVf !== true){
-      throw "incorect password!";
+    // Perform constant-time comparison
+    if (hmacVf !== true || aesVf !== true) {
+        throw "Incorrect password!";
     }
 
     let hmacKey = await subtle.importKey("raw", hmacKey_sig, { name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
@@ -146,7 +144,7 @@ class Keychain {
         tag: decodeBuffer(value["tag"])
       };      
     }
-    
+    ready = true;
     return new Keychain(kvs, masterSalt, hmacSalt, hmacKey_sig, hmacKey, aesSalt, aesKey_sig, aesKey);
   };
 
@@ -185,7 +183,7 @@ class Keychain {
     serializedKeychain = JSON.stringify(serializedKeychain);
     let checksum = await subtle.digest("SHA-256", stringToBuffer(serializedKeychain));
     checksum = encodeBuffer(checksum);
-
+    ready = true;
     return [serializedKeychain, checksum];
   };
 
@@ -201,7 +199,7 @@ class Keychain {
   async get(name) {
     //return with decryption AES-GCM algorithm
     let plaintext = dec_gcm(this.secrets.hmacKey, this.secrets.aesKey, name, this.secrets.kvs)
-    
+
     return plaintext;
   };
 
