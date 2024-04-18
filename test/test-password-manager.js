@@ -79,11 +79,11 @@ describe('Password manager', async function() {
             let data = await keychain.dump();
            
             let contents = data[0];
-            
+       
             let checksum = data[1];
             
             let newKeychain = await Keychain.load(password, contents, checksum);
-
+            
             // Make sure it's valid JSON
             expect(async function() {
                 JSON.parse(contents)
